@@ -3,35 +3,36 @@ Deployment:
       - execute with "python [].py [arguments]"
 
 Sample Deployment:
-          vipr1:/tmp/vseTools # pwd -P
-          /tmp/vseTools
-          vipr1:/tmp/vseTools # ls -alh
-          total 52K
-          drwx------  4 root root 4.0K Sep 26 17:01 .
-          drwxrwxrwt 16 root root 4.0K Sep 26 18:23 ..
-          -rw-------  1 root root  31K Sep 20 22:12 drop_and_ingest_volume.py
-          -rw-------  1 root root 1.6K Sep 12 17:46 env_cfg.ini
-          drwx------  3 root root 4.0K Sep 26 17:12 logsFor_DROP_AND_INGEST_VOLUME
-          drwx------  2 root root 4.0K Sep 26 17:09 vseLib
-          vipr1:/tmp/vseTools # ls -alh ./vseLib/
-          total 240K
-          drwx------ 2 root root 4.0K Sep 26 17:09 .
-          drwx------ 4 root root 4.0K Sep 26 17:01 ..
-          -rw------- 1 root root 1.4K Sep  3  2015 VseExceptions.py
-          -rw------- 1 root root 3.0K Jul 18 16:56 VseExceptions.pyc
-          -rw------- 1 root root  12K Sep 26 17:09 VseHttp.py
-          -rw------- 1 root root 7.8K Sep 26 17:09 VseHttp.pyc
-          -rw------- 1 root root 3.4K Sep 15  2015 VseRemoteExecution.py
-          -rw------- 1 root root 4.8K Jul 25 22:01 VseSymCli.py
-          -rw------- 1 root root  67K Sep 20 21:41 VseViprApi.py
-          -rw------- 1 root root  39K Sep 20 21:41 VseViprApi.pyc
-          -rw------- 1 root root 5.9K Sep 15  2015 VseViprBackups.py
-          -rw------- 1 root root 5.8K Sep  3  2015 VseViprProject.py
-          -rw------- 1 root root 4.3K Sep 12 20:09 VseViprProject.pyc
-          -rw------- 1 root root  100 May 23  2015 __init__.py
-          -rw------- 1 root root  175 Jul 18 16:56 __init__.pyc
-          -rw------- 1 root root  26K Jul 19 17:45 vseCmn.py
-          -rw------- 1 root root  17K Jul 25 17:47 vseCmn.pyc
+		vipr1:/tmp/vseTools # pwd -P
+		/tmp/vseTools
+		vipr1:/tmp/vseTools # ls -alh
+		total 52K
+		drwx------  4 root root 4.0K Sep 26 17:01 .
+		drwxrwxrwt 16 root root 4.0K Sep 26 18:23 ..
+		-rw-------  1 root root  31K Sep 20 22:12 drop_and_ingest_volume.py
+		-rw-------  1 root root 1.6K Sep 12 17:46 env_cfg.ini
+		drwx------  3 root root 4.0K Sep 26 17:12 logsFor_DROP_AND_INGEST_VOLUME
+		drwx------  2 root root 4.0K Sep 26 17:09 vseLib
+		vipr1:/tmp/vseTools # ls -alh ./vseLib/
+		total 240K
+		drwx------ 2 root root 4.0K Sep 26 17:09 .
+		drwx------ 4 root root 4.0K Sep 26 17:01 ..
+		-rw------- 1 root root 1.4K Sep  3  2015 VseExceptions.py
+		-rw------- 1 root root 3.0K Jul 18 16:56 VseExceptions.pyc
+		-rw------- 1 root root  12K Sep 26 17:09 VseHttp.py
+		-rw------- 1 root root 7.8K Sep 26 17:09 VseHttp.pyc
+		-rw------- 1 root root 3.4K Sep 15  2015 VseRemoteExecution.py
+		-rw------- 1 root root 4.8K Jul 25 22:01 VseSymCli.py
+		-rw------- 1 root root  67K Sep 20 21:41 VseViprApi.py
+		-rw------- 1 root root  39K Sep 20 21:41 VseViprApi.pyc
+		-rw------- 1 root root 5.9K Sep 15  2015 VseViprBackups.py
+		-rw------- 1 root root 5.8K Sep  3  2015 VseViprProject.py
+		-rw------- 1 root root 4.3K Sep 12 20:09 VseViprProject.pyc
+		-rw------- 1 root root  100 May 23  2015 __init__.py
+		-rw------- 1 root root  175 Jul 18 16:56 __init__.pyc
+		-rw------- 1 root root  26K Jul 19 17:45 vseCmn.py
+		-rw------- 1 root root  17K Jul 25 17:47 vseCmn.pyc
+
 
 Example of output of "-h":
 
