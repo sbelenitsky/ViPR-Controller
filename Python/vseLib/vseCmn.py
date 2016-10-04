@@ -656,9 +656,13 @@ class vseCmn:
         return value is not None and len(str(value)) > 0
 
     #
-    # to take a list of JSON entries, and produce a dictionary by ID key
+    # to take a list of JSON entries, and produce a dictionary by
+    # {field_name} key
     #
-    def convert_list_of_dict_objects_into_dict_by_id(self, objs_list):
+    # watch out - if key is not unique in the sample, you will have problems
+    #
+    def convert_list_of_dict_objects_into_dict_by_id(self, objs_list,
+                                                     field_name='id'):
         """
 
         :rtype : dict
@@ -671,13 +675,13 @@ class vseCmn:
                               "cannot process...",
                               obj)
                 continue
-            if obj.get('id') is None:
+            if obj.get(field_name) is None:
                 self.printMsg(self.MSG_LVL_WARNING,
-                              "Dictionary does NOT have key 'ID', cannot "
-                              "process...",
+                              "Dictionary does NOT have key {0}, cannot "
+                              "process...".format(field_name),
                               obj)
                 continue
-            return_dict[obj.get('id')] = obj
+            return_dict[obj.get(field_name)] = obj
         return return_dict
 
     #

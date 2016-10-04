@@ -34,6 +34,7 @@ class VseViprApi:
     IDX_SEARCH_TYPE_HOST = '/compute/hosts'
     IDX_SEARCH_TYPE_CLUSTER = '/compute/clusters'
     IDX_SEARCH_TYPE_PROJECT = '/projects'
+    IDX_SEARCH_TYPE_VOLUME = '/block/volumes'
 
     API_GET_SEARCH_BY_NAME = "{0}/search?name={1}"
 
@@ -71,14 +72,21 @@ class VseViprApi:
     #
     API_GET_STORAGE_SYSTEMS = "/vdc/storage-systems"
     API_GET_STORAGE_SYSTEM = "/vdc/storage-systems/{0}"
+    API_GET_STORAGE_SYSTEM_POOLS = "/vdc/storage-systems/{0}/storage-pools"
     API_GET_STORAGE_POOL = "/vdc/storage-pools/{0}"
-
+    API_GET_STORAGE_SYSTEM_PORTS = "/vdc/storage-systems/{0}/storage-ports"
+    API_PST_ALL_STORAGE_PORT_DETAILS = "/vdc/storage-ports/bulk"
     #
     # volumes
     #
     API_GET_ALL_VOLUME_URNS = "/block/volumes/bulk"
     API_PST_ALL_VOLUME_DETAILS = "/block/volumes/bulk"
     API_GET_VOLUME_PROTECTION = "/block/volumes/{0}/protection/{1}"
+
+    #
+    # export groups
+    #
+    API_GET_EXPORT_GROUP = "/block/exports/{0}"
 
     #
     # replication and mirrors
@@ -513,6 +521,30 @@ class VseViprApi:
 
 
     #
+    # returns dictionary of export group details
+    #
+    def get_eg_info_by_uri(self, uri):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Retrieving info for Export Group - " + uri)
+
+        (r_code, r_text) = session.request(
+            'GET',
+            self.API_GET_EXPORT_GROUP.format(uri)
+        )
+        data = json_decode(r_text)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Data for export group (retrieved) - " + uri,
+                     data,
+                     print_only_in_full_debug_mode=True)
+
+        return data
+
+
+    #
     # implements a number of working search queries
     # as named in available variables
     # returns list of matched URNs that need to later be queried further
@@ -571,6 +603,8 @@ class VseViprApi:
             response_dict_key = 'cluster'
         elif post_api == self.API_PST_ALL_VOLUME_DETAILS:
             response_dict_key = 'volume'
+        elif post_api == self.API_PST_ALL_STORAGE_PORT_DETAILS:
+            response_dict_key = 'storage_port'
         else:
             from VseExceptions import VSEViPRAPIExc
             raise VSEViPRAPIExc(
@@ -691,6 +725,56 @@ class VseViprApi:
         cached_sss_details[uri] = data
 
         return data
+
+
+    #
+    # return list of storage pool URIs for storage system
+    #
+    def get_storage_pool_uris_by_ss_uri(self, ss_uri):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Retrieving storage pools for ss - " + ss_uri)
+
+        (r_code, r_text) = session.request(
+            'GET',
+            self.API_GET_STORAGE_SYSTEM_POOLS.format(ss_uri)
+        )
+        data = json_decode(r_text)['storage_pool']
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "List of storage pools for ss - " + ss_uri,
+                     data)
+
+        return data
+
+
+    #
+    # return list of storage port URIs for storage system
+    #
+    def get_storage_port_uris_by_ss_uri(self, ss_uri):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Retrieving storage ports for ss - " + ss_uri)
+
+        (r_code, r_text) = session.request(
+            'GET',
+            self.API_GET_STORAGE_SYSTEM_PORTS.format(ss_uri)
+        )
+        data = json_decode(r_text)['storage_port']
+
+        storage_port_uris = []
+        for brief in data:
+            storage_port_uris.append(brief.get('id'))
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "List of storage ports for ss - " + ss_uri,
+                     storage_port_uris)
+
+        return storage_port_uris
 
 
     #

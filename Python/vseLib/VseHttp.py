@@ -22,8 +22,8 @@ import json
 
 # suppress annoying insecure HTTPS warnings
 # shows an error in Editor, but actually works in practice.
-from requests.packages.urllib3.connectionpool import InsecureRequestWarning
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+# from requests.packages.urllib3.connectionpool import InsecureRequestWarning
+# requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 
 class VseHttp:
@@ -128,6 +128,24 @@ class VseHttp:
         # furthermore, prefetch needs to be set to False, while streaming to
         #  True... weird...
         #
+
+        #
+        # Print what we are trying to do
+        #
+        msg = ""
+        msg += "Executing ViPR API Call:\n"
+        msg += "\tHTTP Method: {0}\n".format(method)
+        msg += "\tURL        : {0}\n".format(full_url)
+        msg += "\tHeaders    : {0}\n".format(session.headers)
+        msg += "\tFile       : {0}\n".format(
+            filename if filename is not None else "")
+        msg += "\tBody       : {0}\n".format(
+            body if body is not None else "")
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     msg,
+                     None,
+                     print_only_in_full_debug_mode=True)
+
 
         #
         # GET into a file...
