@@ -1,3 +1,5 @@
+Tested on ViPR C 3.5.0.1
+
 Deployment:
       - copy vseLib folder, config and utility.py file to the same location on ViPR node. 
       - execute with "python [].py [arguments]"
@@ -35,63 +37,71 @@ Sample Deployment:
 
 
 Example of output of "-h":
+	usage: drop_and_ingest_volume.py [-h] -source_project SOURCE_PROJECT
+									 -target_project TARGET_PROJECT -storage_type
+									 {shared,exclusive} -storage_owner
+									 STORAGE_OWNER -virtual_array VIRTUAL_ARRAY
+									 -virtual_pool VIRTUAL_POOL
+									 [-volume_name VOLUME_NAME]
+									 [-msg_level MSG_LEVEL] [-full_debug]
+									 [-catalog_uxp_rmv_volume CATALOG_UXP_RMV_VOLUME]
+									 [-catalog_discover_unmanaged_volumes CATALOG_DISCOVER_UNMANAGED_VOLUMES]
+									 [-catalog_ingest_exported_volume CATALOG_INGEST_EXPORTED_VOLUME]
 
-    usage: drop_and_ingest_volume.py [-h] -source_project SOURCE_PROJECT
-                                     -storage_type {shared,exclusive}
-                                     -storage_owner STORAGE_OWNER -volume_name
-                                     VOLUME_NAME -target_project TARGET_PROJECT
-                                     [-msg_level MSG_LEVEL] [-full_debug]
-                                     [-catalog_uxp_rmv_volume CATALOG_UXP_RMV_VOLUME]
-                                     [-catalog_discover_unmanaged_volumes CATALOG_DISCOVER_UNMANAGED_VOLUMES]
-                                     [-catalog_ingest_exported_volume CATALOG_INGEST_EXPORTED_VOLUME]
+	drop_and_ingest_volume.py deletes a volume from database and ingests it back
+	under a new project
 
-    drop_and_ingest_volume.py deletes a volume from database and ingests it back
-    under a new project
+	optional arguments:
+	  -h, --help            show this help message and exit
 
-    optional arguments:
-      -h, --help            show this help message and exit
+	Required Arguments:
+	  -source_project SOURCE_PROJECT, -sp SOURCE_PROJECT
+							Specify name of source project.
+	  -target_project TARGET_PROJECT, -tp TARGET_PROJECT
+							Specify name of target project to ingest volumes into.
+	  -storage_type {shared,exclusive}, -st {shared,exclusive}
+							Specify type of storage, either shared or exclusive
+	  -storage_owner STORAGE_OWNER, -so STORAGE_OWNER
+							Specify name of storage owner (host or cluster).
+	  -virtual_array VIRTUAL_ARRAY, -va VIRTUAL_ARRAY
+							Specify name of virtual array
+	  -virtual_pool VIRTUAL_POOL, -vp VIRTUAL_POOL
+							Specify name of virtual pool
 
-    Required Arguments:
-      -source_project SOURCE_PROJECT, -sp SOURCE_PROJECT
-                            Specify name of source project.
-      -storage_type {shared,exclusive}, -st {shared,exclusive}
-                            Specify type of storage, either shared or exclusive
-      -storage_owner STORAGE_OWNER, -so STORAGE_OWNER
-                            Specify name of storage owner (host or cluster).
-      -volume_name VOLUME_NAME, -vn VOLUME_NAME
-                            Specify name of volume.
-      -target_project TARGET_PROJECT, -tp TARGET_PROJECT
-                            Specify name of target project to ingest volumes into.
+	Optional Arguments:
+	  -volume_name VOLUME_NAME, -vn VOLUME_NAME
+							Optionally filter volumes by name (startswith).
+	  -msg_level MSG_LEVEL, -m MSG_LEVEL
+							Specify output level: 0-DEBUG, 1-INFO, 2-WARNING,
+							3-ERROR. INFO is default.
+	  -full_debug           Full Debug will cause full output of API calls and
+							other extra large objects
 
-    Optional Arguments:
-      -msg_level MSG_LEVEL, -m MSG_LEVEL
-                            Specify output level: 0-DEBUG, 1-INFO, 2-WARNING,
-                            3-ERROR. INFO is default.
-      -full_debug           Full Debug will cause full output of API calls and
-                            other extra large objects
-
-    Optional Service Catalog Arguments:
-      -catalog_uxp_rmv_volume CATALOG_UXP_RMV_VOLUME
-                            Specify name of service catalog service inside the
-                            catalog folder that is used to unexport and remove
-                            block volume. Default value is [Unexport and Remove
-                            Block Volumes].
-      -catalog_discover_unmanaged_volumes CATALOG_DISCOVER_UNMANAGED_VOLUMES
-                            Specify name of service catalog service inside the
-                            catalog folder that is used to discover unmanaged
-                            block volumes. Default value is [Discover Unmanaged
-                            Volumes].
-      -catalog_ingest_exported_volume CATALOG_INGEST_EXPORTED_VOLUME
-                            Specify name of service catalog service inside the
-                            catalog folder that is used to ingest exported
-                            unmanaged block volume. Default value is [Ingest
-                            Exported Unmanaged Volumes].
+	Optional Service Catalog Arguments:
+	  -catalog_uxp_rmv_volume CATALOG_UXP_RMV_VOLUME
+							Specify name of service catalog service inside the
+							catalog folder that is used to unexport and remove
+							block volume. Default value is [Remove Block Volumes].
+	  -catalog_discover_unmanaged_volumes CATALOG_DISCOVER_UNMANAGED_VOLUMES
+							Specify name of service catalog service inside the
+							catalog folder that is used to discover unmanaged
+							block volumes. Default value is [Discover Unmanaged
+							Volumes].
+	  -catalog_ingest_exported_volume CATALOG_INGEST_EXPORTED_VOLUME
+							Specify name of service catalog service inside the
+							catalog folder that is used to ingest exported
+							unmanaged block volume. Default value is [Ingest
+							Exported Unmanaged Volumes].
 
 Example of command line to execute:
-#@# python drop_and_ingest_volume.py -msg_level 0 
-                                     -full_debug 
-                                     -sp "test1" 
-                                     -st exclusive 
-                                     -so lglbx028.lss.emc.com 
-                                     -vn "slb-t-name" 
-                                     -tp test1
+
+	#
+	# will move all exported FC block volumes in Source Project to Target Project. Volume filters for VA, VP, and SO will be applied. 
+	#
+	#@# python drop_and_ingest_volume.py -sp MvVols1 
+										 -tp MvVols2 
+										 -st shared 
+										 -so VSECluster 
+										 -va MvVols1186 
+										 -vp "VMAX Local"
+

@@ -35,6 +35,8 @@ class VseViprApi:
     IDX_SEARCH_TYPE_CLUSTER = '/compute/clusters'
     IDX_SEARCH_TYPE_PROJECT = '/projects'
     IDX_SEARCH_TYPE_VOLUME = '/block/volumes'
+    IDX_SEARCH_TYPE_VA = '/vdc/varrays'
+    IDX_SEARCH_TYPE_VP = '/block/vpools'
 
     API_GET_SEARCH_BY_NAME = "{0}/search?name={1}"
 
@@ -51,14 +53,21 @@ class VseViprApi:
     API_PUT_TAGS = "{0}/{1}/tags"
 
     #
+    # initiators
+    #
+    API_PST_INIT_BULK_INFO = "/compute/initiators/bulk"
+
+    #
     # hosts
     #
     API_PST_HOST_BULK_INFO = "/compute/hosts/bulk"
+    API_GET_HOST_INITIATORS = "/compute/hosts/{0}/initiators"
 
     #
     # clusters
     #
     API_PST_CLUSTER_BULK_INFO = "/compute/clusters/bulk"
+    API_GET_CLUSTER_HOSTS = "/compute/clusters/{0}/hosts"
 
     #
     # projects
@@ -76,11 +85,13 @@ class VseViprApi:
     API_GET_STORAGE_POOL = "/vdc/storage-pools/{0}"
     API_GET_STORAGE_SYSTEM_PORTS = "/vdc/storage-systems/{0}/storage-ports"
     API_PST_ALL_STORAGE_PORT_DETAILS = "/vdc/storage-ports/bulk"
+
     #
     # volumes
     #
     API_GET_ALL_VOLUME_URNS = "/block/volumes/bulk"
     API_PST_ALL_VOLUME_DETAILS = "/block/volumes/bulk"
+    API_PST_ALL_VOLUME_EXPORT_PATHS = "/block/volumes/exports/bulk"
     API_GET_VOLUME_PROTECTION = "/block/volumes/{0}/protection/{1}"
 
     #
@@ -545,12 +556,154 @@ class VseViprApi:
 
 
     #
+    # implements lookup of initiators for hosts and clusters by name
+    #
+    def get_initiators_for_compute(self, type, name, uri, protocol=None):
+        cmn = module_var(self, self.IDX_CMN)
+        initiators_dict = dict()
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Looking up initiators for [{0}]=>[{1}]...".format(
+                         name, type))
+
+        # if we are passed a cluster we need to get a list of hosts first
+        # else - make it up from provided data
+        if type == self.STORAGE_TYPE_SHARED:
+            hosts = self.get_cluster_hosts(name, uri)
+        else:
+            hosts = [{"id": uri, "name": name}]
+
+        init_infos = list()
+        for host in hosts:
+            h_uri = host.get('id')
+            h_name = host.get('name')
+            h_wwn_infos = self.get_host_initiators(h_name, h_uri)
+            for h_wwn_info in h_wwn_infos:
+                if protocol is not None and \
+                    h_wwn_info.get('protocol') != protocol:
+                    continue
+                init_infos.append(h_wwn_info)
+
+        return init_infos
+
+
+    #
+    # implements lookup of initiators for a host.
+    # returns list of full infos [ {info1}, {info2}, etc ]
+    #
+    def get_host_initiators(self, name, uri):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Retrieving initiators for host - " + name)
+
+        (r_code, r_text) = session.request(
+            'GET',
+            self.API_GET_HOST_INITIATORS.format(uri)
+        )
+        data = json_decode(r_text)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Hosts of cluster [{0}]=>[{1}] (retrieved):".format(
+                         name, uri
+                     ),
+                     data)
+
+        # use generator to get a list of ID values. aka - URNs of all inits
+        init_uris = list(init.get('id') for init in data.get('initiator'))
+
+        return self.get_bulk_info_by_list_of_ids(self.API_PST_INIT_BULK_INFO,
+                                                 init_uris)
+
+
+    #
+    # implements lookup of hosts in a cluster
+    #
+    def get_cluster_hosts(self, name, uri):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Retrieving hosts for cluster - " + name)
+
+        (r_code, r_text) = session.request(
+            'GET',
+            self.API_GET_CLUSTER_HOSTS.format(uri)
+        )
+        data = json_decode(r_text)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Hosts of cluster [{0}]=>[{1}] (retrieved):".format(
+                         name, uri
+                     ),
+                     data)
+
+        # return a list of dictionaries, 1 per host (name, id)
+        return data.get("host")
+
+
+    #
+    # implements hierarchical lookup of initiators
+    # returns a map objects with info on initiator, its host owner, and its
+    # cluster if there is such
+    #
+    IDX_INIT_INFO = 'initiator_info'
+    IDX_INIT_HOST_INFO = 'host_info'
+    IDX_INIT_CLUSTER_INFO = 'cluster_info'
+    init_hierarchy_cache = {}
+
+    def get_initiator_hierarchy(self, init_urn, init_wwn=None):
+        cmn = module_var(self, self.IDX_CMN)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Looking up hierarchy for initiator [{0}]=>[{"
+                     "1}]...".format(init_urn, init_wwn))
+
+        if init_urn in self.init_hierarchy_cache.keys():
+            cmn.printMsg(cmn.MSG_LVL_DEBUG, "Retrieving hierarchy from cache")
+            return self.init_hierarchy_cache[init_urn]
+
+        init_info = self.get_bulk_info_by_list_of_ids(
+            self.API_PST_INIT_BULK_INFO,
+            [init_urn]
+        )[0]
+
+        host_info = self.get_bulk_info_by_list_of_ids(
+            self.API_PST_HOST_BULK_INFO,
+            [init_info.get('host').get('id')]
+        )[0]
+
+        if 'cluster' in host_info.keys():
+            cluster_info = self.get_bulk_info_by_list_of_ids(
+                self.API_PST_CLUSTER_BULK_INFO,
+                [host_info.get('cluster').get('id')]
+            )[0]
+        else:
+            cluster_info = None
+
+        # fill in the cache
+        hierarchy = dict()
+        hierarchy[self.IDX_INIT_INFO] = init_info
+        hierarchy[self.IDX_INIT_HOST_INFO] = host_info
+        hierarchy[self.IDX_INIT_CLUSTER_INFO] = cluster_info
+        self.init_hierarchy_cache[init_urn] = hierarchy
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Hierarchy data (retrieved):",
+                     hierarchy,
+                     print_only_in_full_debug_mode=True)
+
+        return hierarchy
+
+
+    #
     # implements a number of working search queries
     # as named in available variables
     # returns list of matched URNs that need to later be queried further
     # for their full information
     #
-    def search_by_name(self, type, name):
+    def search_by_name(self, type, name, exact_match=False):
         cmn = module_var(self, self.IDX_CMN)
         session = module_var(self, self.IDX_VIPR_SESSION)
 
@@ -572,7 +725,16 @@ class VseViprApi:
 
         ids_list = list()
         for match in search_matches_list:
-            ids_list.append(match.get('id'))
+            if exact_match is True and name != match.get('match'):
+                cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                             'Exact match is ON, and [{0}]=>[{1}] does not '
+                             'match [{2}], skipping...'.format(
+                                 match.get('match'),
+                                 match.get('id'),
+                                 name
+                             ))
+            else:
+                ids_list.append(match.get('id'))
 
         return ids_list
 
@@ -605,6 +767,10 @@ class VseViprApi:
             response_dict_key = 'volume'
         elif post_api == self.API_PST_ALL_STORAGE_PORT_DETAILS:
             response_dict_key = 'storage_port'
+        elif post_api == self.API_PST_ALL_VOLUME_EXPORT_PATHS:
+            response_dict_key = 'itl'
+        elif post_api == self.API_PST_INIT_BULK_INFO:
+            response_dict_key = 'initiators'
         else:
             from VseExceptions import VSEViPRAPIExc
             raise VSEViPRAPIExc(
@@ -1610,7 +1776,7 @@ class VseViprApi:
     # TODO: this is too raw, needs a wrapper inside VseViprApi
 
     # BSS = Block Storage Services
-    SC_BSS_UXP_RMV_VOLUME = 'Unexport and Remove Block Volumes'
+    SC_BSS_UXP_RMV_VOLUME = 'Remove Block Volumes'
     SC_BSS_DISCOVER_UMNGD = 'Discover Unmanaged Volumes'
     SC_BSS_INGEST_EXPORTED_UMNGD = 'Ingest Exported Unmanaged Volumes'
 

@@ -14,21 +14,9 @@ High level steps:
     5) using Service Catalog API calls: ingest unmanaged volumes
 
 Assumptions:
-    - unmanaged exported volume (storage owner is in the mix)
-    - volumes are not VPLEX and do not have mirrors or other replicas
-
-Turn it into a reasonable product
-    safety features:
-        database backup (ask for it or even perform it)
-        ensure assumptions hold
-        dump collected data onto a file system
-
-    convenience features:
-        simulation mode (execute up to delete from database, and record API
-        calls instead of executing them)
-        multi-volume mode - with restriction of volumes being from same
-        virtual array, virtual pool
-        target project doesn't exist, create?
+    - Exported volumes only
+    - FC protocol only
+    - Not VPLEX, not replicated, not replicas
 
 Version History
     v1.0 + work for a single volume
@@ -42,16 +30,15 @@ Version History
             + block inactive, CG, VPLEX, RPA, SRDF, Locally protected devices
          + carry over volume's tags
 
-TBD:
-    v2.0 - enable multi-volume operation
-         - enable input for multiple volumes by vol_name_mask
+    v2.0 + enable multi-volume operation
+         + enable input for multiple volumes by vol_name_mask
+            + multiple volumes must be in same project, owner, va, vp
+
+Future:
+    v3.0 - enable partial operation attempt from prior session dump file
          - improve safety measures
             - offer backup of vipr database
             - dump candidate volumes' required info into a text file
-            - multiple volumes must be in same project, owner, va, vp
-
-    v3.0 - enable partial operation based on binary op-code
-         - enable partial operation attempt from prior session dump file
 """
 import argparse
 import os
@@ -69,28 +56,40 @@ def parse_arguments():
                     "back under a new project")
 
     r_args = parser.add_argument_group('Required Arguments')
+    # source project
     r_args.add_argument('-source_project', '-sp',
                         required=True,
                         help='Specify name of source project.')
+    # target project
+    r_args.add_argument('-target_project', '-tp',
+                        required=True,
+                        help='Specify name of target project to ingest '
+                             'volumes into.')
+    # storage type - shared or exclusive
     r_args.add_argument('-storage_type', '-st',
                         required=True,
                         choices=[VseViprApi.STORAGE_TYPE_SHARED,
                                  VseViprApi.STORAGE_TYPE_EXCLUSIVE],
                         help='Specify type of storage, either shared or '
                              'exclusive')
+    # owner - name of host or cluster
     r_args.add_argument('-storage_owner', '-so',
                         required=True,
                         help='Specify name of storage owner (host or '
                              'cluster).')
-    r_args.add_argument('-volume_name', '-vn',
+    # virtual_array - to pickup multiple devices
+    r_args.add_argument('-virtual_array', '-va',
                         required=True,
-                        help='Specify name of volume.')
-    r_args.add_argument('-target_project', '-tp',
+                        help='Specify name of virtual array')
+    # virtual_pool - to pickup multiple devices
+    r_args.add_argument('-virtual_pool', '-vp',
                         required=True,
-                        help='Specify name of target project to ingest '
-                             'volumes into.')
+                        help='Specify name of virtual pool')
 
     o_args = parser.add_argument_group('Optional Arguments')
+    o_args.add_argument('-volume_name', '-vn',
+                        required=False,
+                        help='Optionally filter volumes by name (startswith).')
     o_args.add_argument('-msg_level', '-m',
                         required=False,
                         default=vseCmn.MSG_LVL_INFO,
@@ -166,28 +165,15 @@ def main():
     try:
         # instantiate VseViprApi and login to ViPR
         from vseLib.VseViprApi import VseViprApi
+
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Logging into ViPR Controller...")
         vipr_api = VseViprApi(cmn)
         vipr_api.login()
 
         #
-        # match inputs to ViPR entities
-        #
-        (
-            source_project_info,
-            storage_type,
-            storage_owner_info,
-            source_volume_info,
-            target_project_info
-        ) = gather_and_bless_initial_data(cmn, vipr_api,
-                                          args.source_project,
-                                          args.storage_type,
-                                          args.storage_owner,
-                                          args.volume_name,
-                                          args.target_project)
-
-        #
         # find required Service Catalog URNs
         #
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Finding Service Catalog services...")
         (
             sc_uxp_rmv_urn,
             sc_discover_unmanaged_urn,
@@ -201,43 +187,80 @@ def main():
         )
 
         #
-        # parse out necessary pieces of data about the device
+        # match inputs to ViPR entities
         #
-        d_tenant_urn = source_volume_info.get('tenant').get('id')
-        d_va_urn = source_volume_info.get('varray').get('id')
-        d_vp_urn = source_volume_info.get('vpool').get('id')
-        d_ss_urn = source_volume_info.get('storage_controller')
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Finding eligible target devices...")
+        (
+            tenant_urn,
+            va_urn,
+            vp_urn,
+            ss_urn_list,
+            source_project_info,
+            target_project_info,
+            storage_type,
+            storage_owner_info,
+            source_volumes_map
+        ) = gather_and_bless_initial_data(cmn, vipr_api,
+                                          args.source_project,
+                                          args.target_project,
+                                          args.storage_type,
+                                          args.storage_owner,
+                                          args.virtual_array,
+                                          args.virtual_pool,
+                                          args.volume_name)
+
+        cmn.printMsg(
+            cmn.MSG_LVL_INFO,
+            "Qualified below devices for drop/ingest "
+            "from project [{0}] to project [{1}]:".format(
+                args.source_project, args.target_project
+            ),
+            sorted(
+                list(
+                    v.get('name') for v in source_volumes_map.values()
+                )
+            )
+        )
+        if not cmn.confirm(
+                prompt="Review qualified devices above. Shall we proceed?",
+                resp=True):
+            cmn.printMsg(cmn.MSG_LVL_INFO, "stopping execution...")
+            raise VseExceptions.VSEViPRAPIExc("operator refused to proceed")
 
         #
         # service catalog API call to delete device from DB. sync.
         #
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Deleting devices from ViPR DB")
         is_deletion_from_db_success = vipr_api.catalog_execute(
-            "db delete vipr volume",
+            vipr_api.SC_BSS_UXP_RMV_VOLUME,
             sc_uxp_rmv_urn,
-            d_tenant_urn,
+            tenant_urn,
             {'deletionType':'VIPR_ONLY',
              'project':source_project_info.get('id'),
-             'volumes':source_volume_info.get('id')}
+             'volumes': list(v.get('id') for v in source_volumes_map.values())}
         )
         if not is_deletion_from_db_success:
-            msg = "Problem deleting device [{0}]=>[{1}] from database".format(
-                source_volume_info.get('name'),
-                source_volume_info.get('id'))
+            msg = "Problem deleting devices from database:\n"
+            for d_info in source_volumes_map.values():
+                msg += "\t[{0}]=>[{1}]\n".format(d_info.get('label').
+                                                 d_info.get('id'))
             cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
             raise VseExceptions.VSEViPRAPIExc(msg)
 
         #
         # service catalog API call to discover storage array. sync.
         #
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Discovering unmanaged storage "
+                                       "on storage arrays")
         is_unmanaged_volume_discovery_success = vipr_api.catalog_execute(
-            "discover unmanaged volumes",
+            vipr_api.SC_BSS_DISCOVER_UMNGD,
             sc_discover_unmanaged_urn,
-            d_tenant_urn,
-            {'storageSystems': [d_ss_urn]}
+            tenant_urn,
+            {'storageSystems': ss_urn_list}
         )
         if not is_unmanaged_volume_discovery_success:
-            msg = "Problem discovering storage system [{0}]".format(
-                d_ss_urn)
+            msg = "Problem discovering storage systems [{0}]".format(
+                ss_urn_list)
             cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
             raise VseExceptions.VSEViPRAPIExc(msg)
 
@@ -245,45 +268,64 @@ def main():
         # find newly discovered unmanaged device URN that matches
         # device we have just deleted
         #
-        d_unmanaged_urn = match_unmanaged_urn(cmn,
-                                              vipr_api,
-                                              storage_type,
-                                              storage_owner_info.get('id'),
-                                              source_volume_info)
-        if d_unmanaged_urn is None:
-            msg = "Problem finding UnManagedVolume record for " \
-                  "[{0}]=>[{1}]. - WATCH " \
-                  "OUT - device has been removed from ViPR database by this " \
-                  "point in execution!" \
-                  "".format(
-                source_volume_info.get('name'),
-                source_volume_info.get('id')
-            )
-            cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Matching source device URNs to "
+                                       "discovered unmanaged target device "
+                                       "URNs")
+        d_unmanaged_urns = list()
+        missing_unmanaged_msgs = list()
+        for d_info in source_volumes_map.values():
+            d_unmanaged_urn = match_unmanaged_urn(cmn,
+                                                  vipr_api,
+                                                  storage_type,
+                                                  storage_owner_info.get('id'),
+                                                  d_info)
+            if d_unmanaged_urn is None:
+                msg = "Problem finding UnManagedVolume record for " \
+                      "[{0}]=>[{1}]. - WATCH " \
+                      "OUT - device has been removed " \
+                      "from ViPR database by this " \
+                      "point in execution!" \
+                      "".format(
+                      d_info.get('name'),
+                      d_info.get('id')
+                )
+                cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
+                missing_unmanaged_msgs.append(msg)
+                continue
+
+            d_unmanaged_urns.append(d_unmanaged_urn)
+
+        if len(missing_unmanaged_msgs) > 0:
+            msg = ""
+            for v_msg in missing_unmanaged_msgs:
+                msg += v_msg + "\n"
             raise VseExceptions.VSEViPRAPIExc(msg)
+
 
         # service catalog API call to ingest. sync.
         #   - 'storageType' could be 'exclusive' and 'shared'
         #   - 'host' could be URN of a Host or a Cluster
         #   - 'volumes' is a list of UnManagedVolume URN
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Ingesting matched unmanaged URNs")
         is_ingestion_success = vipr_api.catalog_execute(
             "Ingest Exported Unmanaged Volumes",
             sc_ingest_unmanaged_exported_urn,
-            d_tenant_urn,
+            tenant_urn,
             {'storageType': storage_type,
              'host': storage_owner_info.get('id'),
-             'virtualArray': d_va_urn,
-             'virtualPool': d_vp_urn,
+             'virtualArray': va_urn,
+             'virtualPool': vp_urn,
              'project': target_project_info.get('id'),
              'volumeFilter': '-1',
              'ingestionMethod': 'Full',
-             'volumes': [d_unmanaged_urn]
+             'volumes': d_unmanaged_urns
              }
         )
         if not is_ingestion_success:
-            msg = "Problem ingesting device [{0}]=>[{1}] into ViPR".format(
-                source_volume_info.get('name'),
-                "legacy source volume id is no longer active")
+            msg = "Problem ingestion devices:\n"
+            for d_info in source_volumes_map.values():
+                msg += "\t[{0}]=>[{1}]\n".format(d_info.get('label').
+                                                 d_info.get('id'))
             cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
             raise VseExceptions.VSEViPRAPIExc(msg)
 
@@ -293,19 +335,31 @@ def main():
         # Windows, etc. ViPR uses tags to let catalogs know down the line
         # whether they can operate on a volume.
         #
-        is_tag_carried_over = carry_tag_to_ingested_volume(
-            cmn,
-            vipr_api,
-            source_volume_info,
-            target_project_info
-        )
-        if not is_tag_carried_over:
-            msg = "Problem carrying tag over for" \
-                  " device [{0}]=>[{1}]".format(
-                source_volume_info.get('name'),
-                "legacy source volume id is no longer active")
-            cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Carrying over device tags, if any")
+        tagging_errors = list()
+        for v in source_volumes_map.values():
+            is_tag_carried_over = carry_tag_to_ingested_volume(
+                cmn,
+                vipr_api,
+                v,
+                target_project_info
+            )
+            if not is_tag_carried_over:
+                msg = "Problem carrying tag over for" \
+                      " device [{0}]=>[{1}]".format(
+                    v.get('name'),
+                    "legacy source volume id is no longer active")
+                cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
+                tagging_errors.append(msg)
+
+        if len(tagging_errors) > 0:
+            msg = ""
+            for v_msg in tagging_errors:
+                msg += v_msg + "\n"
             raise VseExceptions.VSEViPRAPIExc(msg)
+
+        # TODO: could be that EG on source project is empty now and should
+        # TODO: be deleted.
 
     except Exception as e:
         VseExceptions.announce_exception(cmn, e)
@@ -641,10 +695,13 @@ def is_device_eligible_for_this_algorithm(cmn, vipr_api, device_info):
 
 def gather_and_bless_initial_data(cmn, vipr_api,
                                   source_project_name,
+                                  target_project_name,
                                   storage_type,
                                   storage_owner_name,
-                                  volume_name,
-                                  target_project_name):
+                                  va_name,
+                                  vp_name,
+                                  volume_name=None
+                                  ):
     #
     # get information on source project
     #
@@ -654,6 +711,18 @@ def gather_and_bless_initial_data(cmn, vipr_api,
     if source_project_info is None:
         msg = "Problem querying source project [{0}]".format(
             source_project_name)
+        cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
+        raise VseExceptions.VSEViPRAPIExc(msg)
+
+    #
+    # get information on target project
+    #
+    target_project_info = vipr_api.get_project_info_by_name(
+        target_project_name
+    )
+    if target_project_info is None:
+        msg = "Problem querying target project [{0}]".format(
+            target_project_name)
         cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
         raise VseExceptions.VSEViPRAPIExc(msg)
 
@@ -694,65 +763,173 @@ def gather_and_bless_initial_data(cmn, vipr_api,
             "cannot proceed.".format(storage_owner_name))
 
     #
-    # find source volume URN
+    # find tenant of storage owner
     #
-    device_info = None
+    tenant_urn = owner_info.get('tenant').get('id')
+
+    #
+    # get va_urn
+    #
+    va_match_urns = vipr_api.search_by_name(
+        vipr_api.IDX_SEARCH_TYPE_VA, va_name, True)
+    if len(va_match_urns) != 1:
+        msg = "Matched [{0}] VAs to name [{1}], unable to make " \
+              "determination".format(
+            va_match_urns, va_name)
+        cmn.printMsg(cmn.MSG_LVL_WARNING, msg)
+        raise VseExceptions.VSEViPRAPIExc(msg)
+    va_urn = va_match_urns[0]
+
+    #
+    # get vp_urn
+    #
+    vp_match_urns = vipr_api.search_by_name(
+        vipr_api.IDX_SEARCH_TYPE_VP, vp_name, True)
+    if len(vp_match_urns) != 1:
+        msg = "Matched [{0}] VPs to name [{1}], unable to make " \
+              "determination".format(
+            vp_match_urns, vp_name)
+        cmn.printMsg(cmn.MSG_LVL_WARNING, msg)
+        raise VseExceptions.VSEViPRAPIExc(msg)
+    vp_urn = vp_match_urns[0]
+
+    #
+    # -------------------- DEVICES ------------------------------------
+    #
+
+    # for each device, need to obtain .../exports and trace each Initiator
+    # to owner. Do not execute on devices owned by extra owner. For
+    # exclusive devices ensure no path leads to a different host. For shared
+    # devices ensure no path leads to a different cluster.
+
+    # get a list of device URNs in a project
+    all_project_device_urns = []
     source_project_resources_list = vipr_api.get_project_resources_list(
         source_project_info.get('id')
     )
     for source_project_resource in source_project_resources_list:
-        # filters to get matching device URN
+        # filter out non-volumes
         if source_project_resource.get('resource_type') != 'volume':
             continue
-        if source_project_resource.get('name') != volume_name:
+        # if volume name is provided - filter by volume name
+        if volume_name is not None and \
+            not source_project_resource.get('name').startswith(volume_name):
             continue
-        # lookup of details for the URN
-        devices_details_by_id_dict = \
-            cmn.convert_list_of_dict_objects_into_dict_by_id(
-                vipr_api.get_list_of_vipr_volume_details(
-                    [source_project_resource.get('id')])
-            )
-        # remember retrieved volume into a dictionary
-        device_info = \
-            devices_details_by_id_dict[source_project_resource.get('id')]
+        # record all others for further analysis
+        all_project_device_urns.append(source_project_resource.get('id'))
 
-    if device_info == None:
-        msg = "Device [{0}] not found in project [{1}]".format(
-            volume_name, source_project_name)
-        cmn.printMsg(cmn.MSG_LVL_WARNING, msg)
-        raise VseExceptions.VSEViPRAPIExc(msg)
-
+    # get info for all devices in the project, and filter out by VA/VP
+    # assume that it is cheaper to do that, rather than get exports for
+    # absolutely everything
     #
-    # TODO: cross-reference this volume with whether this host actually has it
-    # this is actually quite difficult for some reason, I can't find the
-    # right API so far, may need to ask for help from developers.
-    #
-
-    #
-    # safety checks on the device
-    #
-    if not is_device_eligible_for_this_algorithm(cmn, vipr_api, device_info):
-        raise VseExceptions.VSEViPRAPIExc(
-            'device [{0}]=>[{1}] is not eligible, cannot continue'.format(
-                device_info.get('device_label'), device_info.get('id'))
-        )
-
-    #
-    # get information on target project
-    #
-    target_project_info = vipr_api.get_project_info_by_name(
-        target_project_name
+    # once we filter out by ownership, we can use the list to return it
+    va_vp_filtered_project_devices_info_map = {}
+    all_project_devices_info_list = vipr_api.get_bulk_info_by_list_of_ids(
+        vipr_api.API_PST_ALL_VOLUME_DETAILS,
+        all_project_device_urns
     )
-    if target_project_info is None:
-        msg = "Problem querying target project [{0}]".format(
-            target_project_name)
-        cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
-        raise VseExceptions.VSEViPRAPIExc(msg)
+    for device_info in all_project_devices_info_list:
+        id = device_info.get('id')
+        this_va_urn = device_info.get('varray').get('id')
+        this_vp_urn = device_info.get('vpool').get('id')
+        # skip device if it doesn't match VA/VP
+        if this_va_urn != va_urn or this_vp_urn != vp_urn:
+            cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                         "Device [{0}]=>[{1}] doesn't match VA/VP filter, "
+                         "skipping...".format(
+                             device_info.get('device_label'),
+                             id)
+            )
+            continue
+        va_vp_filtered_project_devices_info_map[id] = device_info
 
-    return source_project_info, \
-           storage_type, owner_info, \
-           device_info, \
-           target_project_info
+    # get export paths for all devices identified
+    # each export path will have initiator, need to trace and cache initiator
+    # if at any point we find a path leading to unexpected owner - that
+    # device cannot be considered.
+    device_export_paths = vipr_api.get_bulk_info_by_list_of_ids(
+        vipr_api.API_PST_ALL_VOLUME_EXPORT_PATHS,
+        va_vp_filtered_project_devices_info_map.keys()
+    )
+
+    # reshape export paths for a clearer picture of where each device is
+    # mapped.
+    device_to_wwn_paths = dict()
+    for export_path in device_export_paths:
+        d_urn = export_path.get('device').get('id')
+        i_urn = export_path.get('initiator').get('id')
+        if d_urn not in device_to_wwn_paths.keys():
+            device_to_wwn_paths[d_urn] = list()
+        device_to_wwn_paths[d_urn].append(i_urn)
+
+    # now need to figure out what to do...
+
+    # dict to store devices that do not meet eligibility based on paths
+    devices_excluded_and_reason = dict()
+
+    # so need to get that list of owner's WWN
+    owner_initiators = vipr_api.get_initiators_for_compute(
+        storage_type, storage_owner_name, owner_info.get('id'), 'FC'
+    )
+    owner_to_init_urns_list = list(init_info.get('id')
+                                   for init_info in owner_initiators)
+
+    # now compare equivalence of all of owner's initiator URNs with each
+    # device's path initiator URNs.
+    for device_urn in device_to_wwn_paths.keys():
+        device_to_init_urns_list = device_to_wwn_paths[device_urn]
+
+        # perform comparison of unique entries using sets
+        if set(device_to_init_urns_list) != set(owner_to_init_urns_list):
+            devices_excluded_and_reason[device_urn] = \
+                "Owner name mismatch - device is exposed to a different set " \
+                "of WWNs than storage owner in argument"
+
+    # announce devices exclusions
+    msgs = "{0} devices excluded from consideration:\n".format(
+        len(devices_excluded_and_reason.keys()))
+    for device_urn in devices_excluded_and_reason.keys():
+        dev_info = va_vp_filtered_project_devices_info_map[device_urn]
+        dev_name = dev_info.get('device_label')
+        dev_reason = devices_excluded_and_reason[device_urn]
+        msg = "Device [{0}]=>[{1}] is not considered because: [{2}]".format(
+            dev_name, device_urn, dev_reason
+        )
+        msgs += msg + "\n"
+    cmn.printMsg(cmn.MSG_LVL_DEBUG, msgs)
+
+    # devices that we will work on, pre-last filter of device availability
+    devices_urn_remaining_list = list(
+        set(va_vp_filtered_project_devices_info_map.keys()) -
+        set(devices_excluded_and_reason.keys())
+    )
+
+    # last eligibility check - this is what our algorithm can work with
+    # dbl duty - assemble list of StorageSystems to be discovered also
+    final_devices_dict = dict()
+    ss_urn_set = set()
+    for device_urn in devices_urn_remaining_list:
+        device_info = va_vp_filtered_project_devices_info_map[device_urn]
+        if not is_device_eligible_for_this_algorithm(cmn,
+                                                     vipr_api,
+                                                     device_info):
+            cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                'device [{0}]=>[{1}] is not eligible, skipping'.format(
+                    device_info.get('device_label'), device_info.get('id'))
+            )
+        else:
+            final_devices_dict[device_urn] = device_info
+            ss_urn_set.add(device_info.get('storage_controller'))
+
+    return tenant_urn, \
+           va_urn, \
+           vp_urn, \
+           list(ss_urn_set), \
+           source_project_info, \
+           target_project_info, \
+           storage_type, \
+           owner_info, \
+           final_devices_dict
 
 
 def gather_service_catalog_service_urns(cmn, vipr_api,
