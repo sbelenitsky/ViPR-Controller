@@ -71,9 +71,13 @@ def parse_arguments():
     r_args.add_argument('-export_mask_name_xiv', '-emnamexiv',
                         required=True,
                         help='Specify export mask name on XIV system')
-    r_args.add_argument('-export_mask_native_id_xiv', '-emnativeidxiv',
+    r_args.add_argument('-native_data_file', '-ndf',
                         required=True,
-                        help='Specify export mask native id on XIV system')
+                        help='Specify path to file containing native data '
+                             'from XIV system in CSV format. Algorithm '
+                             'accounts for columns [volume-name,masking view '
+                             'name, masking view native id, volume-name, '
+                             'volume-native-id, volume wwn].')
 
     o_args = parser.add_argument_group('Optional Arguments')
     o_args.add_argument('-volume_limit', '-vl',
@@ -133,6 +137,7 @@ def main():
         vipr_api = VseViprApi(cmn)
         vipr_api.login()
 
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Instantiating a Data Repository...")
         data_repo = DataRepo(cmn, vipr_api, args)
 
         #
@@ -145,15 +150,25 @@ def main():
         #
         # processing each VVOL triggers processing of underlying Backing Volume
         #
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Processing Export Groups...")
         process_export_group(cmn, data_repo, args.target_export_group_uri)
 
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Processing Export Masks...")
         process_export_mask(cmn, data_repo, args.target_export_group_uri)
 
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Processing Volumes...")
         process_volumes(cmn, vipr_api, data_repo,
                         args.target_export_group_uri,
                         args.volume_limit)
 
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Printing Update Recommendations...")
         data_repo.print_updates(cmn)
+
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Applying Update Recommendations...")
+        data_repo.apply_updates_to_xml(cmn)
+
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Uploading and Applying XML Files...")
+        data_repo.load_updates_to_vipr(cmn)
 
         vipr_api.logout()
 
@@ -312,7 +327,7 @@ def process_vvol(cmn, vipr_api, data_repo, volume_counter, backing_volume_uri):
         #
         data_repo.get_set_obj(data_repo.IDX_VVOL,
                               vvol_uri,
-                              data_repo.IDX_ASSOCIATED_FILE_NAME,
+                              data_repo.IDX_ASSOCIATED_FILE_NAME_SRC,
                               vvol_dmp_file_name)
         data_repo.get_set_obj(data_repo.IDX_VVOL,
                               vvol_uri,
@@ -402,7 +417,7 @@ def process_backing_volume(cmn, data_repo, volume_counter, backing_volume_uri):
         #
         data_repo.get_set_obj(data_repo.IDX_BE,
                               backing_volume_uri,
-                              data_repo.IDX_ASSOCIATED_FILE_NAME,
+                              data_repo.IDX_ASSOCIATED_FILE_NAME_SRC,
                               bv_dmp_file_name)
         data_repo.get_set_obj(data_repo.IDX_BE,
                               backing_volume_uri,
@@ -454,12 +469,12 @@ def process_backing_volume(cmn, data_repo, volume_counter, backing_volume_uri):
                                  backing_volume_uri,
                                  data_repo.IDX_BE_NATIVE_ID,
                                  data_repo.get_be_new_native_id(
-                                     backing_volume_uri))
+                                     leaf_nativeId.attrib['value']))
         data_repo.request_update(data_repo.IDX_BE,
                                  backing_volume_uri,
                                  data_repo.IDX_BE_NATIVE_GUID,
                                  data_repo.get_be_new_native_guid(
-                                     backing_volume_uri))
+                                     leaf_nativeId.attrib['value']))
         data_repo.request_update(data_repo.IDX_BE,
                                  backing_volume_uri,
                                  data_repo.IDX_BE_STORAGE_DEVICE,
@@ -671,7 +686,7 @@ def process_export_mask(cmn, data_repo, eg_uri):
         #
         data_repo.get_set_obj(data_repo.IDX_EM,
                               em_uri,
-                              data_repo.IDX_ASSOCIATED_FILE_NAME,
+                              data_repo.IDX_ASSOCIATED_FILE_NAME_SRC,
                               em_dmp_file_name)
         data_repo.get_set_obj(data_repo.IDX_EM,
                               em_uri,
@@ -865,7 +880,7 @@ def process_export_group(cmn, data_repo, eg_uri):
         #
         data_repo.get_set_obj(data_repo.IDX_EG,
                               eg_uri,
-                              data_repo.IDX_ASSOCIATED_FILE_NAME,
+                              data_repo.IDX_ASSOCIATED_FILE_NAME_SRC,
                               eg_dmp_file_name)
         data_repo.get_set_obj(data_repo.IDX_EG,
                               eg_uri,
@@ -1043,6 +1058,56 @@ def obtain_xml_dump_file(cmn, filename, cfname, uri):
 
 
 #
+# if all is OK, returns full path to where XML file has been DL'd to.
+#
+def apply_xml_update_file(cmn, filename):
+    vse_rx = VseRemoteExecution(cmn)
+
+    tgt_xml_file_path_lcl = os.path.join(
+        cmn.get_session_path(), filename
+    )
+    tgt_xml_file_path_rmt = PATH_VIPRC_FILE_DUMP.format(filename)
+
+    #
+    # upload xml update file
+    #
+    cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                 "Uploading [{0}] file to remote location [{1}]..."
+                 "".format(
+                     tgt_xml_file_path_lcl,
+                     tgt_xml_file_path_rmt
+                 )
+    )
+
+    #
+    # copy file to remote system, locally
+    # TODO: this can throw Exception if md5 checksum is bad or sftp fails
+    #
+    vse_rx.xfer_file_sftp(
+        vse_rx.XFER_OP_UP,
+        cmn.get_vipr_host_name(),
+        cmn.get_vipr_user(),
+        cmn.get_vipr_password(),
+        tgt_xml_file_path_lcl,
+        tgt_xml_file_path_rmt
+    )
+
+    #
+    # load xml file on remote system
+    # TODO: check output for indications of some sort of error
+    #
+    (exit_code, output) = vse_rx.rx_cmd_simple(
+        cmn.get_vipr_host_name(),
+        cmn.get_vipr_user(),
+        cmn.get_vipr_password(),
+        CMD_DBCLI_LOAD.format(
+            PATH_VIPRC_DBCLI,
+            tgt_xml_file_path_rmt),
+        sleepTimerSeconds=5
+    )
+
+
+#
 # NOTE: I am turning things into lists in order to store them, BUT:
 # but maybe I need to be turning them into hashs, so I can make updates and
 # translate back directly into XML
@@ -1052,7 +1117,8 @@ class DataRepo:
     IDX_CMN = "lib_cmn"
     IDX_API = "lib_api"
 
-    IDX_ASSOCIATED_FILE_NAME = "xml file name"
+    IDX_ASSOCIATED_FILE_NAME_SRC = "xml src file name"
+    IDX_ASSOCIATED_FILE_NAME_TGT = "xml tgt file name"
 
     IDX_EG = "export_group"
     IDX_EG_URI = "uri"
@@ -1106,6 +1172,9 @@ class DataRepo:
     IDX_INFO_TGT_VIRTUAL_ARRAY = "info_target_virtual_array"
     IDX_INFO_TGT_VIRTUAL_POOL = "info_target_virtual_pool"
 
+    IDX_INFO_NTV_DEV = "info_native_devices"
+    IDX_INFO_NTV_DEV_ID = "native_id"
+    IDX_INFO_NTV_DEV_WWN = "wwn"
 
     #
     # take cmn, vipr_api, target export group uri, target storage system uri,
@@ -1129,9 +1198,18 @@ class DataRepo:
         tss_uri = args.target_storage_system_uri
         tsp_name = args.target_storage_pool_name
         tem_name = args.export_mask_name_xiv
-        tem_nativeid = args.export_mask_native_id_xiv
         tva_uri = args.target_virtual_array_uri
         tvp_uri = args.target_virtual_pool_uri
+
+        #
+        # need to get name/native_id of export mask from the user.
+        #
+        self.data[self.IDX_INFO_TGT_EXP_MSK_NAME] = tem_name
+
+        #
+        # consume native XIV data file from Tiru
+        #
+        self.consume_native_data_file(cmn, args.native_data_file, tem_name)
 
         #
         # get data on Target Export Group - that's the group we're going to
@@ -1241,20 +1319,82 @@ class DataRepo:
                                               "pool uri")
         self.data[self.IDX_INFO_TGT_VIRTUAL_POOL] = tvp_info
 
-
-        #
-        # need to get name/native_id of export mask from the user.
-        #
-        self.data[self.IDX_INFO_TGT_EXP_MSK_NAME] = tem_name
-        self.data[self.IDX_INFO_TGT_EXP_MSK_NATIVE_ID] = tem_nativeid
-
-        #
-        # TODO: load up devices data file
-        # at minimum we are missing info on volumes' nativeID and WWN,
-        # mapped to their names (volume-[cinder id])
-        #
-
         pass
+
+
+    #
+    # consume native data file, provided by Tiru's script
+    # assume there is no headers column - that's what Tiru generates
+    # assume it is CSV
+    #
+    # Implied Headers:
+    #   [v-name, em-name, em-id, v-name, v-id, v-wwn]
+    #
+    # Data Example (1 row)
+    #   volume-5484b9dd-a47d-4f67-95e9-37fd34f03d82
+    #   npectsmvplex01-23
+    #   IBMTSDS:IBM.2812-7810713-7a6bf313b001a4
+    #   volume-5484b9dd-a47d-4f67-95e9-37fd34f03d82
+    #   IBM.2812-7810713-12a46121430203d
+    #   0017380029D9203D
+    #
+    # Changes to data that are required:
+    #   - record on parsing
+    #   - pad 3rd piece of masking EM id
+    #
+    def consume_native_data_file(self, cmn, file_path, tem_name):
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     'Reading file [{0}]...'.format(file_path))
+
+        if not os.path.isfile(file_path):
+            msg = 'File [{0}] does not exist'.format(file_path)
+            cmn.printMsg(cmn.MSG_LVL_WARNING, msg)
+            raise VseExceptions.VSEViPRAPIExc(msg)
+
+        contents = open(file_path, 'r')
+
+        IDX_V_NAME_1 = 0
+        IDX_EM_NAME = 1
+        IDX_EM_ID = 2
+        IDX_V_NAME_2 = 3
+        IDX_V_ID = 4
+        IDX_V_WWN = 5
+
+        for line in contents:
+            values = line.split(',')
+            em_name = values[IDX_EM_NAME].strip()
+            em_id = values[IDX_EM_ID].strip()
+            v_name = values[IDX_V_NAME_1].strip()
+            v_id = values[IDX_V_ID].strip()
+            v_wwn = values[IDX_V_WWN].strip()
+
+            if em_name != tem_name:
+                continue
+
+            #
+            # first work on tem_nativeid/em_id. It starts out looking like
+            # npectsmvplex01-23, IBMTSDS:IBM.2812-7810713-7a6bf313b001a4
+            # we need to drop IBMTSDS: part, break it down by '-', pad the
+            # last piece and put it back together.
+            #
+            if self.IDX_INFO_TGT_EXP_MSK_NATIVE_ID not in self.data.keys():
+                em_id = em_id.replace('IBMTSDS:','')
+                em_elements = em_id.split('-')
+                em_elements[2] = em_elements[2].zfill(16)
+                em_id = '-'.join(em_elements)
+                self.data[self.IDX_INFO_TGT_EXP_MSK_NATIVE_ID] = em_id
+
+            #
+            # now document volume ID and WWN based on Cinder ID, only for
+            # export mask we are interested in.
+            #
+            if self.IDX_INFO_NTV_DEV not in self.data.keys():
+                self.data[self.IDX_INFO_NTV_DEV] = {}
+            ntv_devs_hash = self.data[self.IDX_INFO_NTV_DEV]
+
+            ntv_devs_hash[v_name] = {}
+            ntv_devs_hash[v_name][self.IDX_INFO_NTV_DEV_ID] = v_id
+            ntv_devs_hash[v_name][self.IDX_INFO_NTV_DEV_WWN] = v_wwn
 
 
     #
@@ -1364,7 +1504,7 @@ class DataRepo:
                     obj_uri,
                     self.get_set_obj(obj_key,
                                      obj_uri,
-                                     self.IDX_ASSOCIATED_FILE_NAME))
+                                     self.IDX_ASSOCIATED_FILE_NAME_SRC))
                 for prop in changes_hash.keys():
                     new_value = changes_hash[prop]
                     old_value = self.get_set_obj(obj_key, obj_uri, prop)
@@ -1375,15 +1515,212 @@ class DataRepo:
         cmn.printMsg(cmn.MSG_LVL_INFO, msg)
 
 
+    def apply_updates_to_xml(self, cmn):
+        cmn.printMsg(cmn.MSG_LVL_INFO, "Applying updates to XML...")
+
+        updates_hash = self.data[self.IDX_UPDATES]
+        for obj_key in sorted(updates_hash.keys()):
+            for obj_uri in updates_hash[obj_key].keys():
+                changes_hash = updates_hash[obj_key][obj_uri]
+                src_xml_file = self.get_set_obj(
+                    obj_key,
+                    obj_uri,
+                    self.IDX_ASSOCIATED_FILE_NAME_SRC)
+                tgt_xml_file = src_xml_file + "_tgt"
+                cmn.copyFile(
+                    os.path.join(cmn.get_session_path(),src_xml_file),
+                    os.path.join(cmn.get_session_path(),tgt_xml_file))
+                self.get_set_obj(obj_key,
+                                 obj_uri,
+                                 self.IDX_ASSOCIATED_FILE_NAME_TGT,
+                                 tgt_xml_file)
+                if obj_key in ["export_mask"]:
+                    msg = "Changes [{0}]/[{1}]/[{2}] need to be " \
+                          "applied manually to XML file [{3}]:\n".format(
+                        obj_key,
+                        obj_uri,
+                        src_xml_file,
+                        tgt_xml_file
+                    )
+                    for prop in changes_hash.keys():
+                        new_value = changes_hash[prop]
+                        old_value = self.get_set_obj(obj_key, obj_uri, prop)
+                        msg += "\t\tChange property [{0}]:\n" \
+                               "\t\t\tOLD VALUE: {1}\n\t\t\tNEW VALUE: {2}\n" \
+                               "".format(prop, old_value, new_value)
+                    cmn.printMsg(cmn.MSG_LVL_INFO, msg)
+
+                    if cmn.confirm(prompt="Is XML change applied?",
+                                    resp=True):
+                        cmn.printMsg(cmn.MSG_LVL_INFO,
+                                     "response affirmative, moving on...")
+                    else:
+                        cmn.printMsg(cmn.MSG_LVL_WARNING,
+                                     "response negative, raising exception...")
+                        raise VseExceptions.VSEViPRAPIExc(
+                            "User needs to apply XML changes")
+                elif obj_key in ["export_group",
+                                 "volume_virtual",
+                                 "volume_backing"]:
+
+                    msg = "Changes [{0}]/[{1}]/[{2}] are " \
+                          "applied automatically and saved to " \
+                          "XML file [{3}]:\n".format(obj_key,
+                                                     obj_uri,
+                                                     src_xml_file,
+                                                     tgt_xml_file)
+                    cmn.printMsg(cmn.MSG_LVL_INFO, msg)
+
+                    #
+                    # - obtain doc_tree of target XML
+                    # - for every property change
+                    # -- find the right leaf, apply property change
+                    # - close/save XML file
+                    #
+                    out_path = os.path.join(cmn.get_session_path(),
+                                            tgt_xml_file)
+                    doc_tree = eTree.parse(out_path)
+
+                    for prop in changes_hash.keys():
+                        new_value = changes_hash[prop]
+                        old_value = self.get_set_obj(obj_key, obj_uri, prop)
+
+                        #
+                        # simple properties that are fields, such as URI value
+                        #
+                        #  we are looking them up by specifying type as
+                        # field, filtering on prop name, and updating their
+                        # value
+                        #
+                        # varray - vvols
+                        # virtualPool - vvols
+                        #
+                        # nativeGuid - bvols
+                        # varray - bvols
+                        # virtualPool - bvols
+                        # nativeId - bvols
+                        # storageDevice - bvols
+                        # wwn - bvols
+                        # pool - bvols
+                        #
+                        # project, generatedName, varray, tenant, label -
+                        # export group
+                        #
+                        if prop in ["varray",
+                                    "virtualPool",
+                                    "nativeGuid",
+                                    "nativeId",
+                                    "storageDevice",
+                                    "wwn",
+                                    "pool",
+                                    "project",
+                                    "generatedName",
+                                    "varray",
+                                    "tenant",
+                                    "label"]:
+                            leaf = get_xml_leaves_by_name_from_root(
+                                cmn,
+                                doc_tree,
+                                'field',
+                                filter_name=prop)[0]
+                            cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                                         "Setting field [{0}]'s value to "
+                                         "[{1}]".format(
+                                             prop, new_value
+                                         ))
+                            leaf.set('value', new_value)
+
+                        #
+                        # properties that need to have their values
+                        # removed/leaves deleted
+                        #
+                        # instruction for 'extensions' in bvols is to remove
+                        #  all ITL associated entries.
+                        #
+                        elif prop in ["extensions"]:
+                            # record is a parent of all fields
+                            record = doc_tree.getroot().find(
+                                './data_object_schema/record')
+                            leaf = get_xml_leaves_by_name_from_root(
+                                cmn,
+                                doc_tree,
+                                'field',
+                                filter_name=prop)[0]
+                            cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                                         "Deleting field [{0}]".format(prop))
+                            record.remove(leaf)
+
+                        else:
+                            msg = "Code is not ready to deal with "\
+                                  "property [{0}], raising "\
+                                  "exception".format(prop)
+                            cmn.printMsg(cmn.MSG_LVL_ERROR, msg)
+                            raise VseExceptions.VSEViPRAPIExc(msg)
+
+                    cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                                 "Writing changed XML structure out to "
+                                 "[{0}]".format(out_path))
+
+                    doc_tree.write(out_path, xml_declaration=True)
+
+                else:
+                    raise VseExceptions.VSEViPRAPIExc(
+                        "Unknown obj_key value - [{0}]".format(obj_key))
+
+
+    def load_updates_to_vipr(self, cmn):
+        cmn = self.data[self.IDX_CMN]
+
+        # confirm with user that ViPR DB has been backed up prior to
+        proceed = cmn.confirm(
+            prompt="!!! Taking a backup is strongly recommended prior "
+                   "to loading XML files into ViPR DB. !!!\n\n"
+                   "VIPR DATABASE CHANGES ARE EXPECTED BEYOND THIS "
+                   "POINT\n\n"
+                   "You should "
+                   "make sure there is a backup, downloaded in a zip file "
+                   "in a safe location. Proceed with ViPR DB update?",
+            resp=False)
+        if proceed:
+            cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                         "User acknowledged backup requirement, proceeding.")
+        else:
+            cmn.printMsg(cmn.MSG_LVL_WARNING,
+                         "User did not acknowledge backup requirement, "
+                         "stopping.")
+            raise VseExceptions.VSEViPRAPIExc(
+                "User did not acknowledge backup requirement, stopping.")
+
+        #
+        # what files are we loading to ViPR?
+        #
+        updates_hash = self.data[self.IDX_UPDATES]
+        for obj_key in sorted(updates_hash.keys()):
+            for obj_uri in updates_hash[obj_key].keys():
+                tgt_xml_file = self.get_set_obj(
+                    obj_key,
+                    obj_uri,
+                    self.IDX_ASSOCIATED_FILE_NAME_TGT)
+
+                tgt_xml_file_path = os.path.join(
+                    cmn.get_session_path(), tgt_xml_file
+                )
+
+                cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                             "Attempting to load into ViPR file [{0}]".format(
+                                 tgt_xml_file_path
+                             ))
+
+                # TODO: dbcli load file into database
+                apply_xml_update_file(cmn, tgt_xml_file)
+
+
     def get_em_new_native_id(self):
-        # [part of system name in ViPR after + sign
-        #  (e.g.: "IBMXIV+IBM.2810-7812782")]-[native id of export
-        # mask prefixed with 0s to be 16 digits total]
+        # TODO: confusion somewhere, need to verify this... seems
+        # instruction say there is IBMXIV+ prefix to this thing.
+        # IBMXIV+[native id of em w/ 3rd part 0-filled to be 16 digits]
         # e.g. IBM.2810-7812782-00000a3f14500059
-        return "{0}-{1}".format(
-            self.data[self.IDX_INFO_TGT_STORAGE_SYSTEM].get('serial_number'),
-            str(self.data[self.IDX_INFO_TGT_EXP_MSK_NATIVE_ID]).zfill(16)
-        )
+        return self.data[self.IDX_INFO_TGT_EXP_MSK_NATIVE_ID]
 
 
     def get_em_new_storage_system_uri(self):
@@ -1439,11 +1776,45 @@ class DataRepo:
                                  self.get_xiv_volume_wwn(cuav_urn)))
         return native_user_added_volumes
 
-    # TODO: from volume URN, retrieve volume data from ViPR, and map to
-    # passed in volume map, to get that volume's WWN
-    # TODO: cache the volume because it might be requested again
-    def get_xiv_volume_wwn(self, urn):
-        return "fake_xiv_volume_wwn for urn"
+    # start from volume URN, get volume data from ViPR, and use
+    # volume's nativeId to get to the volume name and onto map
+    def get_xiv_volume_wwn(self, v_uri):
+        # query ViPR (or get from Cache) for volume information
+        if self.IDX_INFO_SRC_DEV_LIB not in self.data.keys():
+            self.data[self.IDX_INFO_SRC_DEV_LIB] = {}
+        devs_lib = self.data[self.IDX_INFO_SRC_DEV_LIB]
+
+        # if not cached, cache it.
+        if v_uri not in devs_lib.keys():
+            vipr_api = self.data[self.IDX_API]
+            dev_info = vipr_api.get_bulk_info_by_list_of_ids(
+                vipr_api.API_PST_ALL_VOLUME_DETAILS,
+                [v_uri]
+            )[0]
+            devs_lib[v_uri] = dev_info
+        dev_info = devs_lib[v_uri]
+
+        # at this point nativeId field is the cinder id
+        dev_cinder_id = dev_info.get('native_id')
+
+        ntv_v_name = '{0}-{1}'.format('volume',dev_cinder_id)
+
+        # only bother with devices that have been filtered by EM name (
+        # devices not matching EM name are not added to
+        # self.data[self.IDX_INFO_NTV_DEV]
+        if ntv_v_name not in self.data[self.IDX_INFO_NTV_DEV].keys():
+            msg = "Volume [{0}] not found amongst keys to hash containing " \
+                  "data of native volumes for the Export Mask: [{" \
+                  "1}]".format(ntv_v_name,
+                               self.data[self.IDX_INFO_NTV_DEV].keys())
+            raise VseExceptions.VSEViPRAPIExc(msg)
+
+        ntv_devs_info = self.data[self.IDX_INFO_NTV_DEV]
+        ntv_dev_info = ntv_devs_info[ntv_v_name]
+        ntv_dev_wwn = ntv_dev_info[self.IDX_INFO_NTV_DEV_WWN]
+
+        return ntv_dev_wwn
+
 
     def get_em_new_device_data_map(self):
         # TODO: figure this out
@@ -1466,27 +1837,31 @@ class DataRepo:
         return vplex_be_wwns
 
 
-    # TODO: get native id of the volume from XIV system. IDK how.
-    def get_be_volume_xiv_native_id(self, be_volume_uri):
-        # this is native identifier of a volume in XIV system
-        # this is a component of ViPR BE Volume's nativeId and nativeGuid
-        # fields
-        return "fake_value_native_id_of_volume_on_xiv"
+    def get_be_new_native_id(self, cinder_id):
+        # actual volume id from xiv
+        # IBM.2810-7812782-cc514d001f4
+        ntv_v_name = '{0}-{1}'.format('volume',cinder_id)
+
+        if ntv_v_name not in self.data[self.IDX_INFO_NTV_DEV].keys():
+            msg = "Volume [{0}] not found amongst keys to hash containing " \
+                  "data of native volumes for the Export Mask: [{" \
+                  "1}]".format(ntv_v_name,
+                               self.data[self.IDX_INFO_NTV_DEV].keys())
+            raise VseExceptions.VSEViPRAPIExc(msg)
+
+        ntv_devs_info = self.data[self.IDX_INFO_NTV_DEV]
+        ntv_dev_info = ntv_devs_info[ntv_v_name]
+        ntv_dev_id = ntv_dev_info[self.IDX_INFO_NTV_DEV_ID]
+
+        return ntv_dev_id
 
 
-    def get_be_new_native_id(self, be_volume_uri):
-        # [part of system name after '+' sign]-[actual volume id from xiv]
-        return "{0}-{1}".format(
-            self.data[self.IDX_INFO_TGT_STORAGE_SYSTEM].get('serial_number'),
-            self.get_be_volume_xiv_native_id(be_volume_uri)
-        )
-
-
-    def get_be_new_native_guid(self, be_volume_uri):
+    def get_be_new_native_guid(self, cinder_id):
         # [storage system name]+VOLUME+[nativeId field]
+        # IBMXIV+IBM.2810-7812782+VOLUME+IBM.2810-7812782-cc514d001f4
         return "{0}+VOLUME+{1}".format(
             self.data[self.IDX_INFO_TGT_STORAGE_SYSTEM].get('native_guid'),
-            self.get_be_new_native_id(be_volume_uri)
+            self.get_be_new_native_id(cinder_id)
         )
 
 
