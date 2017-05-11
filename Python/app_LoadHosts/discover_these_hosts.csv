@@ -1,1 +1,3 @@
 Host Human Name,Host FQDN or IP,Host Type,SSL,Port,Username,Password
+host1-name,host1-name.com,Windows,true,5986,administrator,password
+host2-name,host2-name.com,Windows,true,5986,administrator,password
