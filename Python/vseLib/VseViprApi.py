@@ -13,7 +13,7 @@ import time
 import re
 
 from vseCmn import module_var
-from VseHttp import VseHttp, json_decode, json_encode
+from VseHttp import VseHttp, json_decode, json_encode, json_encode_value
 
 
 class VseViprApi:
@@ -27,6 +27,11 @@ class VseViprApi:
     # DEL = DELETE
     # MLT = Multiple methods
     #
+
+    #
+    # WHO AM I ? gets basic info - tenant, permissions
+    #
+    IDX_GET_WHO_AM_I = '/user/whoami'
 
     #
     # search API calls
@@ -62,12 +67,15 @@ class VseViprApi:
     #
     API_PST_HOST_BULK_INFO = "/compute/hosts/bulk"
     API_GET_HOST_INITIATORS = "/compute/hosts/{0}/initiators"
+    API_PST_HOST_CREATE = "/compute/hosts"
+    API_PST_HOST_INIT_CREATE = "/compute/hosts/{0}/initiators"
 
     #
     # clusters
     #
     API_PST_CLUSTER_BULK_INFO = "/compute/clusters/bulk"
     API_GET_CLUSTER_HOSTS = "/compute/clusters/{0}/hosts"
+    API_PST_CLUSTER_CREATE = "/tenants/{0}/clusters"
 
     #
     # projects
@@ -167,6 +175,7 @@ class VseViprApi:
     IDX_CACHED_CG_DETAILS = "cached_cg_details_dict_by_id"
     IDX_CACHED_CATALOG_DETAILS = 'cached_sc_svc_details_dict_by_name'
 
+
     def __init__(self, cmn):
         self.data = {}
         module_var(self, self.IDX_CMN, cmn)
@@ -237,6 +246,29 @@ class VseViprApi:
                      final_volume_tags)
 
         return final_volume_tags
+
+
+    def get_who_am_i(self):
+        """
+        get basic personal info.
+        """
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Getting personal info...")
+
+        (r_code, r_text) = session.request(
+            'GET',
+            self.IDX_GET_WHO_AM_I
+        )
+        about_me = json_decode(r_text)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Personal Info: ",
+                     cmn.ppFormat(about_me),
+                     print_only_in_full_debug_mode=True)
+
+        return about_me
 
 
     def get_list_of_all_vipr_volume_uris(self):
@@ -738,6 +770,7 @@ class VseViprApi:
 
         return ids_list
 
+
     #
     # implements a number of working bulk lookup by IDs queries
     # as named in available variables
@@ -786,6 +819,7 @@ class VseViprApi:
                      print_only_in_full_debug_mode=True)
 
         return list_of_details
+
 
     #
     # returns dictionary of cg details
@@ -1114,6 +1148,143 @@ class VseViprApi:
                      print_only_in_full_debug_mode=True)
 
         return data
+
+
+    #
+    # creates a compute host record, discovery happens automatically
+    # return immediately = async execution
+    #
+    def discover_host(self, tenant_uri, label, fqdn, h_type,
+                      use_ssl, port, uname, pwd):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Creating host - " + label)
+
+        host_create_payload = {
+            "tenant": tenant_uri,
+            "type": h_type,
+            "host_name": fqdn,
+            "name": label,
+            "use_ssl": use_ssl,
+            "port_number": port,
+            "user_name": uname,
+            "password": pwd
+        }
+
+        try:
+            (r_code, r_text) = session.request(
+                'POST',
+                self.API_PST_HOST_CREATE,
+                body=json_encode_value(host_create_payload),
+                content_type='application/json'
+            )
+
+        except Exception as e:
+            return e.response.status_code, json_decode(e.response.text)['details']
+
+        return r_code, ''
+
+
+    #
+    # registers a compute host record, discovery is disabled
+    # return immediately = async execution
+    #
+    def register_host(self, tenant_uri, label, fqdn, h_type, cluster_urn=''):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Registering host - " + label)
+
+        host_register_payload = {
+            "tenant": tenant_uri,
+            "type": h_type,
+            "host_name": fqdn,
+            "name": label,
+            "discoverable": "false"
+        }
+
+        if cluster_urn != '':
+            host_register_payload["cluster"] = cluster_urn
+
+        try:
+            (r_code, r_text) = session.request(
+                'POST',
+                self.API_PST_HOST_CREATE,
+                body=json_encode_value(host_register_payload),
+                content_type='application/json'
+            )
+
+        except Exception as e:
+            return e.response.status_code, json_decode(e.response.text)['details']
+
+        return r_code, json_decode(r_text)
+
+
+    #
+    # create cluster for a tenant
+    # return immediately = async execution
+    #
+    def create_cluster(self, tenant_uri, label):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Creating cluster - " + label)
+
+        cluster_create = {
+            "name": label
+        }
+
+        try:
+            (r_code, r_text) = session.request(
+                'POST',
+                self.API_PST_CLUSTER_CREATE.format(tenant_uri),
+                body=json_encode_value(cluster_create),
+                content_type='application/json'
+            )
+
+        except Exception as e:
+            return e.response.status_code, json_decode(e.response.text)['details']
+
+        return r_code, json_decode(r_text)
+
+
+    #
+    # registers a compute host initiator
+    # return immediately = async execution
+    #
+    def register_initiator(self, host_uri, name, protocol, nwwn, pwwn):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Registering host initiator - {0}/{1}".format(
+                         name, nwwn
+                     )
+        )
+
+        init_register_payload = {
+            "name": name,
+            "protocol": protocol,
+            "initiator_node": nwwn,
+            "initiator_port": pwwn
+        }
+
+        try:
+            (r_code, r_text) = session.request(
+                'POST',
+                self.API_PST_HOST_INIT_CREATE.format(host_uri),
+                body=json_encode_value(init_register_payload),
+                content_type='application/json'
+            )
+
+        except Exception as e:
+            return e.response.status_code, json_decode(e.response.text)['details']
+
+        return r_code, json_decode(r_text)
 
 
     TASK_STATE_COMPLETED = "ready"
@@ -1951,7 +2122,9 @@ class VseViprApi:
     ORDER_STATE_ERROR = 'ERROR'
 
 
-    def await_vipr_order_completion(self, order_dict, previous_state=None):
+    def await_vipr_order_completion(self, order_dict,
+                                    previous_state=None,
+                                    last_order_dict=None):
         """
         await completion of asynchronous orders
         """
@@ -1983,14 +2156,14 @@ class VseViprApi:
                          "Order #{0} / [{1}] / [{2}] completed.".format(
                              order_number, order_summary, order_id))
 
-            return True, None
+            return True, None, order_dict
 
         if order_state == self.ORDER_STATE_ERROR:
             cmn.printMsg(cmn.MSG_LVL_WARNING,
                          "Order #{0} / [{1}] / [{2}] failed:".format(
                              order_number, order_summary, order_id),
                          order_dict.get('message'))
-            return False, None
+            return False, None, order_dict
 
         cmn.printMsg(cmn.MSG_LVL_DEBUG,
                      "Order #{0} / [{1}] / [{2}] did not finish yet, "
@@ -1999,7 +2172,7 @@ class VseViprApi:
         time.sleep(10)
 
         return self.await_vipr_order_completion(
-            self.query_order_state(order_id), order_state)
+            self.query_order_state(order_id), order_state, None)
 
 
     def query_order_state(self, order_urn):

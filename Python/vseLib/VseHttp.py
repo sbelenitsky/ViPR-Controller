@@ -311,6 +311,10 @@ def json_encode(name, value):
     return json.dumps({name: value})
 
 
+def json_encode_value(value):
+    return json.dumps(value)
+
+
 def _decode_list(data):
     rv = []
     for item in data:

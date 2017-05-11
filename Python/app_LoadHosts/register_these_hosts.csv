@@ -1,0 +1,4 @@
+Cluster Name,Host Human Name,Host FQDN or IP,Host Type,WWNs Semicolon Separated Keys (Name/Protocol(FC|iSCSI)/WWN;Name/Protocol(FC|iSCSI)/WWN;)
+slb-fake-cluster,slb-fake-hl-1,slb-fake-hl-1.lss.emc.com,Windows,HBA0/FC/00:11:22:33:44:55:66:1a;HBA1/FC/00:11:22:33:44:55:66:1b;HBA2/FC/00:11:22:33:44:55:66:1c;HBA3/FC/00:11:22:33:44:55:66:1d;
+slb-fake-cluster,slb-fake-hl-2,slb-fake-hl-2.lss.emc.com,Windows,HBA0/FC/00:11:22:33:44:55:66:2a;HBA1/FC/00:11:22:33:44:55:66:2b;HBA2/FC/00:11:22:33:44:55:66:2c;HBA3/FC/00:11:22:33:44:55:66:2d
+,slb-fake-hl-3,slb-fake-hl-3.lss.emc.com,Windows,HBA0/FC/00:11:22:33:44:55:66:3a;HBA1/FC/00:11:22:33:44:55:66:3b;HBA2/FC/00:11:22:33:44:55:66:3c;HBA3/FC/00:11:22:33:44:55:66:3d
