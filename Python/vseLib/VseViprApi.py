@@ -69,6 +69,7 @@ class VseViprApi:
     API_GET_HOST_INITIATORS = "/compute/hosts/{0}/initiators"
     API_PST_HOST_CREATE = "/compute/hosts"
     API_PST_HOST_INIT_CREATE = "/compute/hosts/{0}/initiators"
+    API_PUT_HOST_UPDATE = "/compute/hosts/{0}"
 
     #
     # clusters
@@ -1177,6 +1178,63 @@ class VseViprApi:
             (r_code, r_text) = session.request(
                 'POST',
                 self.API_PST_HOST_CREATE,
+                body=json_encode_value(host_create_payload),
+                content_type='application/json'
+            )
+
+        except Exception as e:
+            return e.response.status_code, json_decode(e.response.text)['details']
+
+        return r_code, ''
+
+
+    #
+    # creates a compute host record, discovery happens automatically
+    # return immediately = async execution
+    #
+    def update_host(self, host_uri, label=None, fqdn=None, h_type=None, use_ssl=None,
+                    port=None, uname=None, pwd=None):
+        cmn = module_var(self, self.IDX_CMN)
+        session = module_var(self, self.IDX_VIPR_SESSION)
+
+        cmn.printMsg(cmn.MSG_LVL_DEBUG,
+                     "Creating host - " + label)
+
+        host_create_payload = {}
+
+        if label is not None:
+            host_create_payload["name"] = label
+        if fqdn is not None:
+            host_create_payload["host_name"] = fqdn
+        if h_type is not None:
+            host_create_payload["type"] = h_type
+        if use_ssl is not None:
+            host_create_payload["use_ssl"] = use_ssl
+        if port is not None:
+            host_create_payload["port_number"] = port
+        if uname is not None:
+            host_create_payload["user_name"] = uname
+        if pwd is not None:
+            host_create_payload["password"] = pwd
+
+        # if  is not None:
+        #     host_create_payload[""] =
+        #
+        # REMAINING POSSIBILITIES FOR UPDATE (per 3.6 API guide)
+        #
+        #   "update_san_boot_targets": "",-------
+        #   "os_version": "",
+        #   "cluster": "",-----------------------URI of the cluster
+        #   "vcenter_data_center": "",-----------URI of vC for ESX
+        #   "project": "",-----------------------not in use
+        #   "discoverable": "",------------------true/false
+        #   "tenant": "",------------------------give host to a diff tenant?
+        #   "boot_volume": ""
+
+        try:
+            (r_code, r_text) = session.request(
+                'PUT',
+                self.API_PUT_HOST_UPDATE.format(host_uri),
                 body=json_encode_value(host_create_payload),
                 content_type='application/json'
             )

@@ -16,6 +16,9 @@ High level steps:
     3) for the tenant at hand, report on how discovery of hosts is ongoing
     4) when number of successfully discovered hosts doesn't change, offer to quit.
 
+Executing script AGAIN on same arguments (or when some clusters/hosts/initiators are already in ViPR)
+- for discovered hosts the script will update all provided fields (except for Human Host Name - it searches by that, so update would provide the same value back)
+- for registered hosts it will use the cluster/hosts it found, and will not register WWNs 2nd time
 """
 
 import argparse
@@ -140,6 +143,8 @@ def main():
         # prepare for summary output
         discovery_accepted_count = 0
         discovery_failed_count = 0
+        discovery_host_existing_pwd_update_success_count = 0
+        discovery_host_existing_pwd_update_failure_count = 0
         register_cluster_existing_count = 0
         register_cluster_new_count = 0
         register_cluster_fail_count = 0
@@ -156,22 +161,48 @@ def main():
             # discovering hosts
             #
             if not args.register_hosts:
-                (ret_code, details) = vipr_api.discover_host(
-                    tenant_uri,
+                # does host exist? update password! else discover anew
+                host_ids = vipr_api.search_by_name(
+                    vipr_api.IDX_SEARCH_TYPE_HOST,
                     host_info_list[IDX_H_H_N].strip(),
-                    host_info_list[IDX_H_N_N].strip(),
-                    host_info_list[IDX_H_T].strip(),
-                    host_info_list[IDX_D_SSL].strip(),
-                    host_info_list[IDX_D_P_N].strip(),
-                    host_info_list[IDX_H_U_N].strip(),
-                    host_info_list[IDX_H_PWD].strip(),
+                    exact_match=True
                 )
+                # host exists, we update all we have but the name of it
+                if len(host_ids) == 1:
+                    host_uri = host_ids[0]
+                    (ret_code, details) = vipr_api.update_host(
+                        host_uri,
+                        fqdn=host_info_list[IDX_H_N_N].strip(),
+                        h_type=host_info_list[IDX_H_T].strip(),
+                        use_ssl=host_info_list[IDX_D_SSL].strip(),
+                        port=host_info_list[IDX_D_P_N].strip(),
+                        uname=host_info_list[IDX_H_U_N].strip(),
+                        pwd=host_info_list[IDX_H_PWD].strip()
+                    )
 
-                if ret_code not in [200, 202]:
-                    discovery_failed_count += 1
-                    status_chain[host_info_list[IDX_H_N_N]] = details
+                    if ret_code not in [200, 202]:
+                        discovery_host_existing_pwd_update_failure_count += 1
+                        status_chain[host_info_list[IDX_H_N_N]] = details
+                    else:
+                        discovery_host_existing_pwd_update_success_count += 1
+                # host doesn't exist, we attempt to create it
                 else:
-                    discovery_accepted_count += 1
+                    (ret_code, details) = vipr_api.discover_host(
+                        tenant_uri,
+                        host_info_list[IDX_H_H_N].strip(),
+                        host_info_list[IDX_H_N_N].strip(),
+                        host_info_list[IDX_H_T].strip(),
+                        host_info_list[IDX_D_SSL].strip(),
+                        host_info_list[IDX_D_P_N].strip(),
+                        host_info_list[IDX_H_U_N].strip(),
+                        host_info_list[IDX_H_PWD].strip(),
+                    )
+
+                    if ret_code not in [200, 202]:
+                        discovery_failed_count += 1
+                        status_chain[host_info_list[IDX_H_N_N]] = details
+                    else:
+                        discovery_accepted_count += 1
 
             #
             # registering clusters/hosts/initiators
@@ -270,6 +301,7 @@ def main():
                      'Total host loads attempted: {0}\n'
                      'Total host discoveries accepted : {1}\n'
                      'Total host discoveries rejected : {2}\n'
+                     'Total host update succeeded/failed: {12},{13}\n'
                      'Total cluster registrations existed/succeeded/failed: {3},{4},{5}\n'
                      'Total host registrations existed/succeeded/failed: {6},{7},{8}\n'
                      'Total initiator registrations existed/succeeded/failed: {9},{10},{11}\n'
@@ -286,6 +318,8 @@ def main():
                          register_wwn_existing_count,
                          register_wwn_new_count,
                          register_wwn_fail_count,
+                         discovery_host_existing_pwd_update_success_count,
+                         discovery_host_existing_pwd_update_failure_count,
                      ),
                      status_chain)
 
